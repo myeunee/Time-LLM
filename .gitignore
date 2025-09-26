@@ -1,0 +1,15 @@
+# 가상환경/캐시
+.venv/
+venv/
+__pycache__/
+.DS_Store
+
+# 체크포인트/결과물
+checkpoints/**
+outputs/**
+
+# 대용량 데이터 (프롬프트만 제외)
+dataset/**
+!dataset/prompt_bank/
+!dataset/prompt_bank/**
+dataset/ETTh1.csv

@@ -13,6 +13,8 @@ import time
 import random
 import numpy as np
 import os
+import pandas as pd
+import matplotlib.pyplot as plt
 
 os.environ['CURL_CA_BUNDLE'] = ''
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:64"
@@ -97,10 +99,16 @@ parser.add_argument('--pct_start', type=float, default=0.2, help='pct_start')
 parser.add_argument('--use_amp', action='store_true', help='use automatic mixed precision training', default=False)
 parser.add_argument('--llm_layers', type=int, default=6)
 parser.add_argument('--percent', type=int, default=100)
+parser.add_argument('--use_deepspeed', action='store_true', help='enable DeepSpeed (default: off for local runs)')
+
+# output saving
+parser.add_argument('--save_preds_csv', action='store_true', help='save predictions to CSV')
+parser.add_argument('--save_plot_png', action='store_true', help='save an example plot to PNG')
+parser.add_argument('--output_dir', type=str, default='./outputs', help='directory to save predictions/plots/metrics')
 
 args = parser.parse_args()
 ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True)
-deepspeed_plugin = DeepSpeedPlugin(hf_ds_config='./ds_config_zero2.json')
+deepspeed_plugin = DeepSpeedPlugin(hf_ds_config='./ds_config_zero2.json') if args.use_deepspeed else None
 accelerator = Accelerator(kwargs_handlers=[ddp_kwargs], deepspeed_plugin=deepspeed_plugin)
 
 for ii in range(args.itr):
@@ -164,8 +172,10 @@ for ii in range(args.itr):
     criterion = nn.MSELoss()
     mae_metric = nn.L1Loss()
 
-    train_loader, vali_loader, test_loader, model, model_optim, scheduler = accelerator.prepare(
-        train_loader, vali_loader, test_loader, model, model_optim, scheduler)
+    # Only prepare model/optimizer/scheduler to avoid Accelerate auto-moving
+    # DataLoaders to device (which can push float64 to MPS and crash).
+    model, model_optim, scheduler = accelerator.prepare(
+        model, model_optim, scheduler)
 
     if args.use_amp:
         scaler = torch.cuda.amp.GradScaler()
@@ -262,6 +272,104 @@ for ii in range(args.itr):
 
         else:
             accelerator.print('Updating learning rate to {}'.format(scheduler.get_last_lr()[0]))
+
+    # after training, optionally run a test pass to save predictions/plots
+    if args.save_preds_csv or args.save_plot_png:
+        all_preds = []
+        all_trues = []
+        first_batch_true_hist = None
+        first_batch_pred = None
+        first_batch_true_future = None
+
+        model.eval()
+        with torch.no_grad():
+            for i, (batch_x, batch_y, batch_x_mark, batch_y_mark) in tqdm(enumerate(test_loader)):
+                batch_x = batch_x.float().to(accelerator.device)
+                batch_y = batch_y.float()
+                batch_x_mark = batch_x_mark.float().to(accelerator.device)
+                batch_y_mark = batch_y_mark.float().to(accelerator.device)
+
+                dec_inp = torch.zeros_like(batch_y[:, -args.pred_len:, :]).float()
+                dec_inp = torch.cat([batch_y[:, :args.label_len, :], dec_inp], dim=1).float().to(
+                    accelerator.device)
+
+                outputs = model(batch_x, batch_x_mark, dec_inp, batch_y_mark)
+
+                f_dim = -1 if args.features == 'MS' else 0
+                outputs = outputs[:, -args.pred_len:, f_dim:]
+                batch_y_future = batch_y[:, -args.pred_len:, f_dim:].to(accelerator.device)
+
+                # gather across processes
+                outputs, batch_y_future = accelerator.gather_for_metrics((outputs, batch_y_future))
+
+                if accelerator.is_local_main_process:
+                    all_preds.append(outputs.detach().cpu().numpy())
+                    all_trues.append(batch_y_future.detach().cpu().numpy())
+
+                    if first_batch_pred is None:
+                        # also keep history for plotting from the current local batch before gather
+                        # rebuild a local copy for the first local batch example
+                        first_batch_true_hist = batch_y[:1, :args.label_len, f_dim:].detach().cpu().numpy()
+                        first_batch_true_future = batch_y_future[:1].detach().cpu().numpy()
+                        first_batch_pred = outputs[:1].detach().cpu().numpy()
+
+        if accelerator.is_local_main_process:
+            os.makedirs(args.output_dir, exist_ok=True)
+            file_prefix = f"{args.model_id}_{args.model_comment}"
+
+            # save metrics and predictions CSV
+            if len(all_preds) > 0:
+                preds = np.concatenate(all_preds, axis=0)
+                trues = np.concatenate(all_trues, axis=0)
+
+                # metrics
+                mse = float(np.mean((preds - trues) ** 2))
+                mae = float(np.mean(np.abs(preds - trues)))
+                metrics_path = os.path.join(args.output_dir, f"metrics_{file_prefix}.csv")
+                pd.DataFrame([
+                    {"metric": "MSE", "value": mse},
+                    {"metric": "MAE", "value": mae},
+                ]).to_csv(metrics_path, index=False)
+
+                if args.save_preds_csv:
+                    # flatten to long format: sample, step, pred, true
+                    num_samples, horizon, num_channels = preds.shape
+                    rows = []
+                    for s in range(num_samples):
+                        for t in range(horizon):
+                            # for MS, num_channels==1; for others, we serialize channel 0
+                            rows.append({
+                                "sample": s,
+                                "step": t,
+                                "pred": float(preds[s, t, 0]),
+                                "true": float(trues[s, t, 0])
+                            })
+                    preds_path = os.path.join(args.output_dir, f"predictions_{file_prefix}.csv")
+                    pd.DataFrame(rows).to_csv(preds_path, index=False)
+
+            # save a quick plot for the first example
+            if args.save_plot_png and first_batch_pred is not None:
+                plt.figure(figsize=(9, 4))
+                # history then future truth
+                hist = first_batch_true_hist[0, :, 0] if first_batch_true_hist is not None else None
+                fut_true = first_batch_true_future[0, :, 0]
+                fut_pred = first_batch_pred[0, :, 0]
+
+                if hist is not None:
+                    plt.plot(range(len(hist)), hist, label='history (label_len)', color='#888888')
+                    offset = len(hist)
+                else:
+                    offset = 0
+
+                plt.plot(range(offset, offset + len(fut_true)), fut_true, label='true (future)', color='#1f77b4')
+                plt.plot(range(offset, offset + len(fut_pred)), fut_pred, label='pred', color='#d62728')
+                plt.axvline(x=offset - 1, color='k', linestyle='--', linewidth=0.8)
+                plt.title(f"{args.data} {args.features} | {args.model} | MAE/MSE saved")
+                plt.legend()
+                plt.tight_layout()
+                plot_path = os.path.join(args.output_dir, f"plot_{file_prefix}.png")
+                plt.savefig(plot_path, dpi=150)
+                plt.close()
 
 accelerator.wait_for_everyone()
 if accelerator.is_local_main_process:
