@@ -7,9 +7,13 @@ __pycache__/
 # 체크포인트/결과물
 checkpoints/**
 outputs/**
+outputs-*/**
 
 # 대용량 데이터 (프롬프트만 제외)
 dataset/**
 !dataset/prompt_bank/
 !dataset/prompt_bank/**
 dataset/ETTh1.csv
+
+# Google Cluster 데이터
+google-cluster-data/
