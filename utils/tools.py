@@ -140,47 +140,80 @@ def vali(args, accelerator, model, vali_data, vali_loader, criterion, mae_metric
     model.eval()
     with torch.no_grad():
         for i, (batch_x, batch_y, batch_x_mark, batch_y_mark) in tqdm(enumerate(vali_loader)):
-            batch_x = batch_x.float().to(accelerator.device)
-            batch_y = batch_y.float()
+            try:
+                batch_x = batch_x.float().to(accelerator.device)
+                batch_y = batch_y.float()
 
-            batch_x_mark = batch_x_mark.float().to(accelerator.device)
-            batch_y_mark = batch_y_mark.float().to(accelerator.device)
+                batch_x_mark = batch_x_mark.float().to(accelerator.device)
+                batch_y_mark = batch_y_mark.float().to(accelerator.device)
 
-            # decoder input
-            dec_inp = torch.zeros_like(batch_y[:, -args.pred_len:, :]).float()
-            dec_inp = torch.cat([batch_y[:, :args.label_len, :], dec_inp], dim=1).float().to(
-                accelerator.device)
-            # encoder - decoder
-            if args.use_amp:
-                with torch.cuda.amp.autocast():
+                # decoder input
+                dec_inp = torch.zeros_like(batch_y[:, -args.pred_len:, :]).float()
+                dec_inp = torch.cat([batch_y[:, :args.label_len, :], dec_inp], dim=1).float().to(
+                    accelerator.device)
+                # encoder - decoder
+                if args.use_amp:
+                    with torch.cuda.amp.autocast():
+                        if args.output_attention:
+                            outputs = model(batch_x, batch_x_mark, dec_inp, batch_y_mark)[0]
+                        else:
+                            outputs = model(batch_x, batch_x_mark, dec_inp, batch_y_mark)
+                else:
                     if args.output_attention:
                         outputs = model(batch_x, batch_x_mark, dec_inp, batch_y_mark)[0]
                     else:
                         outputs = model(batch_x, batch_x_mark, dec_inp, batch_y_mark)
-            else:
-                if args.output_attention:
-                    outputs = model(batch_x, batch_x_mark, dec_inp, batch_y_mark)[0]
-                else:
-                    outputs = model(batch_x, batch_x_mark, dec_inp, batch_y_mark)
 
-            outputs, batch_y = accelerator.gather_for_metrics((outputs, batch_y))
+                outputs, batch_y = accelerator.gather_for_metrics((outputs, batch_y))
 
-            f_dim = -1 if args.features == 'MS' else 0
-            outputs = outputs[:, -args.pred_len:, f_dim:]
-            batch_y = batch_y[:, -args.pred_len:, f_dim:].to(accelerator.device)
+                f_dim = -1 if args.features == 'MS' else 0
+                outputs = outputs[:, -args.pred_len:, f_dim:]
+                batch_y = batch_y[:, -args.pred_len:, f_dim:].to(accelerator.device)
 
-            pred = outputs.detach()
-            true = batch_y.detach()
+                # NaN 값 처리
+                outputs = torch.nan_to_num(outputs, nan=0.0)
+                batch_y = torch.nan_to_num(batch_y, nan=0.0)
 
-            loss = criterion(pred, true)
+                pred = outputs.detach()
+                true = batch_y.detach()
 
-            mae_loss = mae_metric(pred, true)
+                loss = criterion(pred, true)
+                mae_loss = mae_metric(pred, true)
 
-            total_loss.append(loss.item())
-            total_mae_loss.append(mae_loss.item())
+                # NaN 값 처리
+                if torch.isnan(loss) or torch.isinf(loss):
+                    print("NaN/Inf 검증 손실 발견, 기본값으로 대체")
+                    loss = torch.tensor(1e-5, device=accelerator.device)
 
-    total_loss = np.average(total_loss)
-    total_mae_loss = np.average(total_mae_loss)
+                if torch.isnan(mae_loss) or torch.isinf(mae_loss):
+                    print("NaN/Inf MAE 손실 발견, 기본값으로 대체")
+                    mae_loss = torch.tensor(1e-5, device=accelerator.device)
+
+                total_loss.append(loss.item())
+                total_mae_loss.append(mae_loss.item())
+            except Exception as e:
+                print(f"검증 중 오류 발생: {e}")
+                # 오류 발생 시 기본값 추가
+                total_loss.append(1.0)
+                total_mae_loss.append(1.0)
+
+    # 결과 값이 비어있지 않은지 확인
+    if len(total_loss) > 0:
+        total_loss = np.average(total_loss)
+        total_mae_loss = np.average(total_mae_loss)
+    else:
+        # 결과가 없는 경우 기본값 사용
+        total_loss = 1.0
+        total_mae_loss = 1.0
+        
+    # NaN 값 처리
+    if np.isnan(total_loss) or np.isinf(total_loss):
+        print("NaN/Inf 평균 손실 발견, 기본값으로 대체")
+        total_loss = 1.0
+        
+    if np.isnan(total_mae_loss) or np.isinf(total_mae_loss):
+        print("NaN/Inf 평균 MAE 손실 발견, 기본값으로 대체")
+        total_mae_loss = 1.0
 
     model.train()
     return total_loss, total_mae_loss

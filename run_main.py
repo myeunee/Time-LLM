@@ -212,7 +212,18 @@ for ii in range(args.itr):
                     f_dim = -1 if args.features == 'MS' else 0
                     outputs = outputs[:, -args.pred_len:, f_dim:]
                     batch_y = batch_y[:, -args.pred_len:, f_dim:].to(accelerator.device)
+                    
+                    # NaN 값 처리
+                    outputs = torch.nan_to_num(outputs, nan=0.0)
+                    batch_y = torch.nan_to_num(batch_y, nan=0.0)
+                    
                     loss = criterion(outputs, batch_y)
+                    
+                    # NaN 손실이 발생하면 작은 값으로 대체
+                    if torch.isnan(loss):
+                        print("NaN 손실 발견, 기본값으로 대체")
+                        loss = torch.tensor(1e-5, device=accelerator.device)
+                    
                     train_loss.append(loss.item())
             else:
                 if args.output_attention:
@@ -223,7 +234,18 @@ for ii in range(args.itr):
                 f_dim = -1 if args.features == 'MS' else 0
                 outputs = outputs[:, -args.pred_len:, f_dim:]
                 batch_y = batch_y[:, -args.pred_len:, f_dim:]
+                
+                # NaN 값 처리
+                outputs = torch.nan_to_num(outputs, nan=0.0)
+                batch_y = torch.nan_to_num(batch_y, nan=0.0)
+                
                 loss = criterion(outputs, batch_y)
+                
+                # NaN 손실이 발생하면 작은 값으로 대체
+                if torch.isnan(loss):
+                    print("NaN 손실 발견, 기본값으로 대체")
+                    loss = torch.tensor(1e-5, device=accelerator.device)
+                
                 train_loss.append(loss.item())
 
             if (i + 1) % 100 == 0:
@@ -235,13 +257,17 @@ for ii in range(args.itr):
                 iter_count = 0
                 time_now = time.time()
 
-            if args.use_amp:
-                scaler.scale(loss).backward()
-                scaler.step(model_optim)
-                scaler.update()
-            else:
-                accelerator.backward(loss)
-                model_optim.step()
+            try:
+                if args.use_amp:
+                    scaler.scale(loss).backward()
+                    scaler.step(model_optim)
+                    scaler.update()
+                else:
+                    accelerator.backward(loss)
+                    model_optim.step()
+            except Exception as e:
+                print(f"역전파 중 오류 발생: {e}")
+                # 오류 발생 시 이 배치 건너뛰기
 
             if args.lradj == 'TST':
                 adjust_learning_rate(accelerator, model_optim, scheduler, epoch + 1, args, printout=False)

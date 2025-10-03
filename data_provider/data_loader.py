@@ -244,12 +244,28 @@ class Dataset_Custom(Dataset):
                                           self.data_path))
 
         '''
-        df_raw.columns: ['date', ...(other features), target feature]
+        df_raw.columns: ['date' or 'start_time', ...(other features), target feature]
         '''
         cols = list(df_raw.columns)
         cols.remove(self.target)
-        cols.remove('date')
-        df_raw = df_raw[['date'] + cols + [self.target]]
+        
+        # 'date' 또는 'start_time' 열 처리
+        date_col = 'date'
+        if 'date' not in cols and 'start_time' in cols:
+            date_col = 'start_time'
+            # start_time을 date로 변환 (마이크로초 단위 타임스탬프인 경우)
+            if pd.api.types.is_numeric_dtype(df_raw[date_col]):
+                df_raw['date'] = pd.to_datetime(df_raw[date_col], unit='us')
+                date_col = 'date'
+            cols.remove('start_time')
+        elif 'date' in cols:
+            cols.remove('date')
+        else:
+            # 날짜 열이 없는 경우 인덱스를 날짜로 사용
+            df_raw['date'] = pd.date_range(start='2023-01-01', periods=len(df_raw), freq='5min')
+            date_col = 'date'
+            
+        df_raw = df_raw[[date_col] + cols + [self.target]]
         num_train = int(len(df_raw) * 0.7)
         num_test = int(len(df_raw) * 0.2)
         num_vali = len(df_raw) - num_train - num_test

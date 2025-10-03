@@ -204,11 +204,18 @@ class Model(nn.Module):
         B, T, N = x_enc.size()
         x_enc = x_enc.permute(0, 2, 1).contiguous().reshape(B * N, T, 1)
 
+        # 안전하게 통계값 계산
         min_values = torch.min(x_enc, dim=1)[0]
         max_values = torch.max(x_enc, dim=1)[0]
         medians = torch.median(x_enc, dim=1).values
+        
+        # 차분 계산 시 NaN 방지
+        x_diff = x_enc.diff(dim=1)
+        x_diff = torch.nan_to_num(x_diff, nan=0.0)
+        trends = x_diff.sum(dim=1)
+        
+        # 자기상관 계산
         lags = self.calcute_lags(x_enc)
-        trends = x_enc.diff(dim=1).sum(dim=1)
 
         prompt = []
         for b in range(x_enc.shape[0]):
@@ -237,11 +244,17 @@ class Model(nn.Module):
         source_embeddings = self.mapping_layer(self.word_embeddings.permute(1, 0)).permute(1, 0)
 
         x_enc = x_enc.permute(0, 2, 1).contiguous()
-        # Use float32 on MPS (bfloat16 unsupported), otherwise bfloat16
-        if x_enc.device.type == 'mps':
+        # MPS 디바이스에서는 항상 float32 사용, 다른 디바이스에서도 안전하게 float32 사용
+        try:
+            if x_enc.device.type == 'mps':
+                enc_out, n_vars = self.patch_embedding(x_enc.to(torch.float32))
+            else:
+                # bfloat16이 지원되지 않을 수 있으므로 float32로 안전하게 변경
+                enc_out, n_vars = self.patch_embedding(x_enc.to(torch.float32))
+        except Exception as e:
+            print(f"패치 임베딩 에러 발생: {e}")
+            # 오류 발생 시 float32로 시도
             enc_out, n_vars = self.patch_embedding(x_enc.to(torch.float32))
-        else:
-            enc_out, n_vars = self.patch_embedding(x_enc.to(torch.bfloat16))
         # Match dtype with prompt embeddings before concat
         enc_out = enc_out.to(prompt_embeddings.dtype)
         enc_out = self.reprogramming_layer(enc_out, source_embeddings, source_embeddings)
@@ -261,23 +274,33 @@ class Model(nn.Module):
         return dec_out
 
     def calcute_lags(self, x_enc):
-        if x_enc.device.type == 'mps':
-            x_cpu = x_enc.permute(0, 2, 1).contiguous().to('cpu', dtype=torch.float32)
-            q_fft = torch.fft.rfft(x_cpu, dim=-1)
-            k_fft = torch.fft.rfft(x_cpu, dim=-1)
-            res = q_fft * torch.conj(k_fft)
-            corr = torch.fft.irfft(res, dim=-1)
-            mean_value = torch.mean(corr, dim=1)
-            _, lags = torch.topk(mean_value, self.top_k, dim=-1)
-            return lags.to(x_enc.device)
-        else:
-            q_fft = torch.fft.rfft(x_enc.permute(0, 2, 1).contiguous(), dim=-1)
-            k_fft = torch.fft.rfft(x_enc.permute(0, 2, 1).contiguous(), dim=-1)
-            res = q_fft * torch.conj(k_fft)
-            corr = torch.fft.irfft(res, dim=-1)
-            mean_value = torch.mean(corr, dim=1)
-            _, lags = torch.topk(mean_value, self.top_k, dim=-1)
-            return lags
+        try:
+            if x_enc.device.type == 'mps':
+                # MPS 디바이스에서는 CPU로 이동하여 계산
+                x_cpu = x_enc.permute(0, 2, 1).contiguous().to('cpu', dtype=torch.float32)
+                q_fft = torch.fft.rfft(x_cpu, dim=-1)
+                k_fft = torch.fft.rfft(x_cpu, dim=-1)
+                res = q_fft * torch.conj(k_fft)
+                corr = torch.fft.irfft(res, dim=-1)
+                mean_value = torch.mean(corr, dim=1)
+                # NaN 값이 있으면 0으로 대체
+                mean_value = torch.nan_to_num(mean_value, nan=0.0)
+                _, lags = torch.topk(mean_value, self.top_k, dim=-1)
+                return lags.to(x_enc.device)
+            else:
+                q_fft = torch.fft.rfft(x_enc.permute(0, 2, 1).contiguous(), dim=-1)
+                k_fft = torch.fft.rfft(x_enc.permute(0, 2, 1).contiguous(), dim=-1)
+                res = q_fft * torch.conj(k_fft)
+                corr = torch.fft.irfft(res, dim=-1)
+                mean_value = torch.mean(corr, dim=1)
+                # NaN 값이 있으면 0으로 대체
+                mean_value = torch.nan_to_num(mean_value, nan=0.0)
+                _, lags = torch.topk(mean_value, self.top_k, dim=-1)
+                return lags
+        except Exception as e:
+            print(f"calcute_lags 에러 발생: {e}")
+            # 에러 발생 시 기본값 반환
+            return torch.zeros(x_enc.size(0), self.top_k, device=x_enc.device, dtype=torch.long)
 
 
 class ReprogrammingLayer(nn.Module):

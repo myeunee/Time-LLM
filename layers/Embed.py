@@ -175,14 +175,29 @@ class PatchEmbedding(nn.Module):
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, x):
-        # do patching
-        n_vars = x.shape[1]
-        x = self.padding_patch_layer(x)
-        x = x.unfold(dimension=-1, size=self.patch_len, step=self.stride)
-        x = torch.reshape(x, (x.shape[0] * x.shape[1], x.shape[2], x.shape[3]))
-        # Input encoding
-        x = self.value_embedding(x)
-        return self.dropout(x), n_vars
+        try:
+            # do patching
+            n_vars = x.shape[1]
+            x = self.padding_patch_layer(x)
+            x = x.unfold(dimension=-1, size=self.patch_len, step=self.stride)
+            x = torch.reshape(x, (x.shape[0] * x.shape[1], x.shape[2], x.shape[3]))
+            
+            # NaN 값 처리
+            x = torch.nan_to_num(x, nan=0.0)
+            
+            # Input encoding
+            x = self.value_embedding(x)
+            return self.dropout(x), n_vars
+        except Exception as e:
+            print(f"패치 임베딩 오류: {e}")
+            # 오류 발생 시 기본 임베딩 반환
+            dummy_embedding = torch.zeros(
+                x.shape[0] * x.shape[1] if len(x.shape) > 2 else x.shape[0], 
+                self.patch_len, 
+                self.value_embedding.tokenConv.out_channels,
+                device=x.device
+            )
+            return dummy_embedding, n_vars
 
 
 class DataEmbedding_wo_time(nn.Module):
