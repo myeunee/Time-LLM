@@ -186,6 +186,40 @@ def vali(args, accelerator, model, vali_data, vali_loader, criterion, mae_metric
     return total_loss, total_mae_loss
 
 
+def save_example_plot(args, accelerator, model, data_loader, out_path):
+    """Save a single example plot (history, ground-truth future, prediction)."""
+    import os
+    os.makedirs(os.path.dirname(out_path), exist_ok=True)
+    model.eval()
+    with torch.no_grad():
+        for batch_x, batch_y, batch_x_mark, batch_y_mark in data_loader:
+            batch_x = batch_x.float().to(accelerator.device)
+            batch_y = batch_y.float().to(accelerator.device)
+            batch_x_mark = batch_x_mark.float().to(accelerator.device)
+            batch_y_mark = batch_y_mark.float().to(accelerator.device)
+            dec_inp = torch.zeros_like(batch_y[:, -args.pred_len:, :]).float().to(accelerator.device)
+            dec_inp = torch.cat([batch_y[:, :args.label_len, :], dec_inp], dim=1)
+            outputs = model(batch_x, batch_x_mark, dec_inp, batch_y_mark)
+            f_dim = -1 if args.features == 'MS' else 0
+            outputs = outputs[:, -args.pred_len:, f_dim:]
+            true = batch_y[:, -args.pred_len:, f_dim:]
+            # take first sample & first variable
+            hist = batch_x[0, :, 0].detach().cpu().numpy()
+            gt = true[0, :, 0].detach().cpu().numpy()
+            pred = outputs[0, :, 0].detach().cpu().numpy()
+            # plot
+            plt.figure(figsize=(8, 3))
+            t_hist = np.arange(len(hist))
+            t_future = np.arange(len(hist), len(hist) + len(gt))
+            plt.plot(t_hist, hist, label='history')
+            plt.plot(t_future, gt, label='ground-truth')
+            plt.plot(t_future, pred, label='prediction')
+            plt.legend(); plt.tight_layout()
+            plt.savefig(out_path)
+            plt.close()
+            break
+
+
 def test(args, accelerator, model, train_loader, vali_loader, criterion):
     x, _ = train_loader.dataset.last_insample_window()
     y = vali_loader.dataset.timeseries

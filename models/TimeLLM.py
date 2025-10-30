@@ -175,6 +175,8 @@ class Model(nn.Module):
 
         self.word_embeddings = self.llm_model.get_input_embeddings().weight
         self.vocab_size = self.word_embeddings.shape[0]
+        # override llm dim with actual embedding size to avoid mismatch across models (e.g., GPT2=768, LLaMA=4096)
+        self.d_llm = int(self.word_embeddings.shape[1])
         self.num_tokens = 1000
         self.mapping_layer = nn.Linear(self.vocab_size, self.num_tokens)
 
@@ -190,6 +192,38 @@ class Model(nn.Module):
             raise NotImplementedError
 
         self.normalize_layers = Normalize(configs.enc_in, affine=False)
+
+        # optional extra modules for ablation (green boxes in diagram)
+        self.extra_head = getattr(configs, 'extra_head', 'none')
+        if self.extra_head == 'mlp':
+            self.extra_module = nn.Sequential(
+                nn.Linear(configs.d_model, configs.d_model),
+                nn.ReLU(),
+                nn.Linear(configs.d_model, configs.d_model)
+            )
+        elif self.extra_head == 'lstm':
+            self.extra_module = nn.LSTM(
+                input_size=configs.d_model,
+                hidden_size=configs.d_model,
+                num_layers=1,
+                batch_first=True
+            )
+        elif self.extra_head == 'mlp_lstm':
+            # compose LSTM then MLP
+            self.extra_lstm = nn.LSTM(
+                input_size=configs.d_model,
+                hidden_size=configs.d_model,
+                num_layers=1,
+                batch_first=True
+            )
+            self.extra_mlp = nn.Sequential(
+                nn.Linear(configs.d_model, configs.d_model),
+                nn.ReLU(),
+                nn.Linear(configs.d_model, configs.d_model)
+            )
+            self.extra_module = 'mlp_lstm'
+        else:
+            self.extra_module = None
 
     def forward(self, x_enc, x_mark_enc, x_dec, x_mark_dec, mask=None):
         if self.task_name == 'long_term_forecast' or self.task_name == 'short_term_forecast':
@@ -232,12 +266,31 @@ class Model(nn.Module):
         x_enc = x_enc.reshape(B, N, T).permute(0, 2, 1).contiguous()
 
         prompt = self.tokenizer(prompt, return_tensors="pt", padding=True, truncation=True, max_length=2048).input_ids
-        prompt_embeddings = self.llm_model.get_input_embeddings()(prompt.to(x_enc.device))  # (batch, prompt_token, dim)
+        # compute prompt embeddings on the same device as LLM embeddings (usually CPU), then move to x_enc device
+        emb_device = self.word_embeddings.device
+        prompt_embeddings = self.llm_model.get_input_embeddings()(prompt.to(emb_device))
+        prompt_embeddings = prompt_embeddings.to(x_enc.device)
 
         source_embeddings = self.mapping_layer(self.word_embeddings.permute(1, 0)).permute(1, 0)
+        source_embeddings = source_embeddings.to(x_enc.device)
 
         x_enc = x_enc.permute(0, 2, 1).contiguous()
-        enc_out, n_vars = self.patch_embedding(x_enc.to(torch.bfloat16))
+        # MPS는 bfloat16 미지원이므로 dtype을 동적으로 선택
+        desired_dtype = torch.bfloat16 if (x_enc.device.type == 'cuda') else torch.float32
+        enc_out, n_vars = self.patch_embedding(x_enc.to(desired_dtype))
+
+        # apply optional extra head on patch embeddings before reprogramming
+        if self.extra_module is not None:
+            original_dtype = enc_out.dtype
+            enc_out = enc_out.to(torch.float32)
+            if self.extra_head == 'lstm':
+                enc_out, _ = self.extra_module(enc_out)
+            elif self.extra_head == 'mlp_lstm':
+                enc_out, _ = self.extra_lstm(enc_out)
+                enc_out = self.extra_mlp(enc_out)
+            else:
+                enc_out = self.extra_module(enc_out)
+            enc_out = enc_out.to(original_dtype)
         enc_out = self.reprogramming_layer(enc_out, source_embeddings, source_embeddings)
         llama_enc_out = torch.cat([prompt_embeddings, enc_out], dim=1)
         dec_out = self.llm_model(inputs_embeds=llama_enc_out).last_hidden_state
@@ -255,13 +308,20 @@ class Model(nn.Module):
         return dec_out
 
     def calcute_lags(self, x_enc):
-        q_fft = torch.fft.rfft(x_enc.permute(0, 2, 1).contiguous(), dim=-1)
-        k_fft = torch.fft.rfft(x_enc.permute(0, 2, 1).contiguous(), dim=-1)
+        # MPS에서 torch.fft가 미지원이므로 FFT만 CPU로 우회
+        original_device = x_enc.device
+        if original_device.type == 'mps':
+            x_cpu = x_enc.detach().to('cpu', dtype=torch.float32)
+            q_fft = torch.fft.rfft(x_cpu.permute(0, 2, 1).contiguous(), dim=-1)
+            k_fft = torch.fft.rfft(x_cpu.permute(0, 2, 1).contiguous(), dim=-1)
+        else:
+            q_fft = torch.fft.rfft(x_enc.permute(0, 2, 1).contiguous(), dim=-1)
+            k_fft = torch.fft.rfft(x_enc.permute(0, 2, 1).contiguous(), dim=-1)
         res = q_fft * torch.conj(k_fft)
         corr = torch.fft.irfft(res, dim=-1)
         mean_value = torch.mean(corr, dim=1)
         _, lags = torch.topk(mean_value, self.top_k, dim=-1)
-        return lags
+        return lags.to(original_device)
 
 
 class ReprogrammingLayer(nn.Module):

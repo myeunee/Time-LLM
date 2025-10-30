@@ -17,7 +17,7 @@ import os
 os.environ['CURL_CA_BUNDLE'] = ''
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:64"
 
-from utils.tools import del_files, EarlyStopping, adjust_learning_rate, vali, load_content
+from utils.tools import del_files, EarlyStopping, adjust_learning_rate, vali, load_content, save_example_plot
 
 parser = argparse.ArgumentParser(description='Time-LLM')
 
@@ -98,10 +98,28 @@ parser.add_argument('--use_amp', action='store_true', help='use automatic mixed 
 parser.add_argument('--llm_layers', type=int, default=6)
 parser.add_argument('--percent', type=int, default=100)
 
+# ablation options
+parser.add_argument('--extra_head', type=str, default='none', choices=['none', 'mlp', 'lstm', 'mlp_lstm'],
+                    help='optional extra module applied on patch embeddings before reprogramming')
+parser.add_argument('--no_cleanup', action='store_true', default=True,
+                    help='if set, do not delete checkpoints directory after training')
+parser.add_argument('--use_deepspeed', action='store_true', default=False,
+                    help='enable DeepSpeed only on CUDA; disabled by default (MPS/macOS not supported)')
+
 args = parser.parse_args()
 ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True)
-deepspeed_plugin = DeepSpeedPlugin(hf_ds_config='./ds_config_zero2.json')
-accelerator = Accelerator(kwargs_handlers=[ddp_kwargs], deepspeed_plugin=deepspeed_plugin)
+
+# Configure accelerator: avoid DeepSpeed on CPU/MPS; enable only if explicitly requested and CUDA is available
+use_mps = hasattr(torch.backends, 'mps') and torch.backends.mps.is_available()
+use_cuda = torch.cuda.is_available()
+if use_mps:
+    # avoid multiprocessing dataloader issues on macOS
+    args.num_workers = 0
+if args.use_deepspeed and use_cuda and not use_mps:
+    deepspeed_plugin = DeepSpeedPlugin(hf_ds_config='./ds_config_zero2.json')
+    accelerator = Accelerator(device_placement=False, kwargs_handlers=[ddp_kwargs], deepspeed_plugin=deepspeed_plugin)
+else:
+    accelerator = Accelerator(device_placement=False, kwargs_handlers=[ddp_kwargs])
 
 for ii in range(args.itr):
     # setting record of experiments
@@ -133,6 +151,12 @@ for ii in range(args.itr):
         model = DLinear.Model(args).float()
     else:
         model = TimeLLM.Model(args).float()
+
+    # When device_placement is False, we must place the model explicitly
+    try:
+        model.to(accelerator.device)
+    except Exception:
+        pass
 
     path = os.path.join(args.checkpoints,
                         setting + '-' + args.model_comment)  # unique checkpoint saving path
@@ -245,6 +269,11 @@ for ii in range(args.itr):
             "Epoch: {0} | Train Loss: {1:.7f} Vali Loss: {2:.7f} Test Loss: {3:.7f} MAE Loss: {4:.7f}".format(
                 epoch + 1, train_loss, vali_loss, test_loss, test_mae_loss))
 
+        # save a small example plot on main process
+        if accelerator.is_local_main_process and (epoch == args.train_epochs - 1 or epoch % 1 == 0):
+            fig_dir = os.path.join(path, 'figs')
+            save_example_plot(args, accelerator, model, test_loader, os.path.join(fig_dir, f'epoch_{epoch+1}.png'))
+
         early_stopping(vali_loss, model, path)
         if early_stopping.early_stop:
             accelerator.print("Early stopping")
@@ -264,7 +293,7 @@ for ii in range(args.itr):
             accelerator.print('Updating learning rate to {}'.format(scheduler.get_last_lr()[0]))
 
 accelerator.wait_for_everyone()
-if accelerator.is_local_main_process:
-    path = './checkpoints'  # unique checkpoint saving path
-    del_files(path)  # delete checkpoint files
+if accelerator.is_local_main_process and not args.no_cleanup:
+    path = './checkpoints'
+    del_files(path)
     accelerator.print('success delete checkpoints')
