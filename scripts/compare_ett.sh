@@ -33,7 +33,7 @@ COMMON_ARGS_BASE="--task_name long_term_forecast \
   --c_out 7 \
   --batch_size 16 \
   --num_workers 0 \
-  --learning_rate 5e-4 \
+  --learning_rate 3e-4 \
   --llm_model GPT2 \
   --llm_layers 2 \
   --train_epochs 1"

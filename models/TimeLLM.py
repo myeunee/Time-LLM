@@ -209,17 +209,23 @@ class Model(nn.Module):
                 batch_first=True
             )
         elif self.extra_head == 'mlp_lstm':
-            # compose LSTM then MLP
+            # compose Bi-LSTM then MLP with normalization and dropout
             self.extra_lstm = nn.LSTM(
                 input_size=configs.d_model,
                 hidden_size=configs.d_model,
                 num_layers=1,
-                batch_first=True
+                batch_first=True,
+                bidirectional=True,
+                dropout=0.0  # single layer, no internal dropout
             )
+            # Bi-LSTM outputs d_model*2, add LayerNorm and MLP with dropout
+            self.extra_norm = nn.LayerNorm(configs.d_model * 2)
             self.extra_mlp = nn.Sequential(
-                nn.Linear(configs.d_model, configs.d_model),
+                nn.Linear(configs.d_model * 2, configs.d_model),
                 nn.ReLU(),
-                nn.Linear(configs.d_model, configs.d_model)
+                nn.Dropout(0.2),
+                nn.Linear(configs.d_model, configs.d_model),
+                nn.Dropout(0.2)
             )
             self.extra_module = 'mlp_lstm'
         else:
@@ -287,6 +293,7 @@ class Model(nn.Module):
                 enc_out, _ = self.extra_module(enc_out)
             elif self.extra_head == 'mlp_lstm':
                 enc_out, _ = self.extra_lstm(enc_out)
+                enc_out = self.extra_norm(enc_out)
                 enc_out = self.extra_mlp(enc_out)
             else:
                 enc_out = self.extra_module(enc_out)
