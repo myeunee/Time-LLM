@@ -182,6 +182,9 @@ class Model(nn.Module):
 
         self.reprogramming_layer = ReprogrammingLayer(configs.d_model, configs.n_heads, self.d_ff, self.d_llm)
 
+        # Set extra_head early (before using it)
+        self.extra_head = getattr(configs, 'extra_head', 'none')
+
         self.patch_nums = int((configs.seq_len - self.patch_len) / self.stride + 2)
         self.head_nf = self.d_ff * self.patch_nums
 
@@ -194,7 +197,7 @@ class Model(nn.Module):
         self.normalize_layers = Normalize(configs.enc_in, affine=False)
 
         # optional extra modules for ablation (green boxes in diagram)
-        self.extra_head = getattr(configs, 'extra_head', 'none')
+        # Note: self.extra_head is already set above (before mlp_lstm initialization)
         if self.extra_head == 'mlp':
             self.extra_module = nn.Sequential(
                 nn.Linear(configs.d_model, configs.d_model),
@@ -209,22 +212,24 @@ class Model(nn.Module):
                 batch_first=True
             )
         elif self.extra_head == 'mlp_lstm':
-            # compose Bi-LSTM then MLP with normalization and dropout
+            # LSTM: takes patching output (before patch embedding)
+            # patch_len is the size of each patch
             self.extra_lstm = nn.LSTM(
-                input_size=configs.d_model,
+                input_size=self.patch_len,
                 hidden_size=configs.d_model,
                 num_layers=1,
                 batch_first=True,
-                bidirectional=True,
-                dropout=0.0  # single layer, no internal dropout
+                bidirectional=False,  # 단방향
+                dropout=0.0
             )
-            # Bi-LSTM outputs d_model*2, add LayerNorm and MLP with dropout
-            self.extra_norm = nn.LayerNorm(configs.d_model * 2)
+            # MLP: takes ReprogrammingLayer output + LSTM output (d_llm + d_model)
+            mlp_input_dim = self.d_llm + configs.d_model
+            self.extra_norm = nn.LayerNorm(mlp_input_dim)
             self.extra_mlp = nn.Sequential(
-                nn.Linear(configs.d_model * 2, configs.d_model),
+                nn.Linear(mlp_input_dim, self.d_llm),
                 nn.ReLU(),
                 nn.Dropout(0.2),
-                nn.Linear(configs.d_model, configs.d_model),
+                nn.Linear(self.d_llm, self.d_llm),
                 nn.Dropout(0.2)
             )
             self.extra_module = 'mlp_lstm'
@@ -283,22 +288,42 @@ class Model(nn.Module):
         x_enc = x_enc.permute(0, 2, 1).contiguous()
         # MPS는 bfloat16 미지원이므로 dtype을 동적으로 선택
         desired_dtype = torch.bfloat16 if (x_enc.device.type == 'cuda') else torch.float32
+        
+        # For mlp_lstm: save patched data before embedding
+        lstm_skip = None
+        if self.extra_head == 'mlp_lstm':
+            # Do patching manually to get raw patches for LSTM
+            B_orig, N_orig, T_orig = x_enc.shape
+            x_patched = self.patch_embedding.padding_patch_layer(x_enc.to(torch.float32))
+            x_patched = x_patched.unfold(dimension=-1, size=self.patch_len, step=self.stride)
+            # x_patched shape: (B, N, num_patches, patch_len)
+            # Reshape for LSTM: (B*N, num_patches, patch_len)
+            x_patched = torch.reshape(x_patched, (x_patched.shape[0] * x_patched.shape[1], x_patched.shape[2], x_patched.shape[3]))
+            # Apply LSTM (단방향)
+            lstm_skip, _ = self.extra_lstm(x_patched)  # (B*N, num_patches, d_model)
+        
         enc_out, n_vars = self.patch_embedding(x_enc.to(desired_dtype))
 
-        # apply optional extra head on patch embeddings before reprogramming
-        if self.extra_module is not None:
+        # apply optional extra head (non-mlp_lstm cases)
+        if self.extra_module is not None and self.extra_head != 'mlp_lstm':
             original_dtype = enc_out.dtype
             enc_out = enc_out.to(torch.float32)
             if self.extra_head == 'lstm':
                 enc_out, _ = self.extra_module(enc_out)
-            elif self.extra_head == 'mlp_lstm':
-                enc_out, _ = self.extra_lstm(enc_out)
-                enc_out = self.extra_norm(enc_out)
-                enc_out = self.extra_mlp(enc_out)
             else:
                 enc_out = self.extra_module(enc_out)
             enc_out = enc_out.to(original_dtype)
+        
+        # ReprogrammingLayer
         enc_out = self.reprogramming_layer(enc_out, source_embeddings, source_embeddings)
+        
+        # For mlp_lstm: combine ReprogrammingLayer output + LSTM output, then apply MLP
+        if self.extra_head == 'mlp_lstm' and lstm_skip is not None:
+            # enc_out: (B*N, num_patches, d_llm)
+            # lstm_skip: (B*N, num_patches, d_model)
+            combined = torch.cat([enc_out, lstm_skip], dim=-1)  # (B*N, num_patches, d_llm + d_model)
+            combined = self.extra_norm(combined)
+            enc_out = self.extra_mlp(combined)  # (B*N, num_patches, d_llm)
         llama_enc_out = torch.cat([prompt_embeddings, enc_out], dim=1)
         dec_out = self.llm_model(inputs_embeds=llama_enc_out).last_hidden_state
         dec_out = dec_out[:, :, :self.d_ff]
