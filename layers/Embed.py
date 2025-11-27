@@ -39,6 +39,9 @@ class TokenEmbedding(nn.Module):
                     m.weight, mode='fan_in', nonlinearity='leaky_relu')
 
     def forward(self, x):
+        # Conv1d는 입력/가중치 dtype이 일치해야 하므로 weight dtype으로 맞춤
+        if x.dtype != self.tokenConv.weight.dtype:
+            x = x.to(self.tokenConv.weight.dtype)
         x = self.tokenConv(x.permute(0, 2, 1)).transpose(1, 2)
         return x
 

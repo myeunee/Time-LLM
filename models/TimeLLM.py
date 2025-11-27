@@ -347,8 +347,8 @@ class Model(nn.Module):
             q_fft = torch.fft.rfft(x_cpu.permute(0, 2, 1).contiguous(), dim=-1)
             k_fft = torch.fft.rfft(x_cpu.permute(0, 2, 1).contiguous(), dim=-1)
         else:
-            q_fft = torch.fft.rfft(x_enc.permute(0, 2, 1).contiguous(), dim=-1)
-            k_fft = torch.fft.rfft(x_enc.permute(0, 2, 1).contiguous(), dim=-1)
+        q_fft = torch.fft.rfft(x_enc.permute(0, 2, 1).contiguous(), dim=-1)
+        k_fft = torch.fft.rfft(x_enc.permute(0, 2, 1).contiguous(), dim=-1)
         res = q_fft * torch.conj(k_fft)
         corr = torch.fft.irfft(res, dim=-1)
         mean_value = torch.mean(corr, dim=1)
