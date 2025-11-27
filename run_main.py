@@ -116,7 +116,7 @@ if use_mps:
     # avoid multiprocessing dataloader issues on macOS
     args.num_workers = 0
 if args.use_deepspeed and use_cuda and not use_mps:
-deepspeed_plugin = DeepSpeedPlugin(hf_ds_config='./ds_config_zero2.json')
+    deepspeed_plugin = DeepSpeedPlugin(hf_ds_config='./ds_config_zero2.json')
     accelerator = Accelerator(device_placement=False, kwargs_handlers=[ddp_kwargs], deepspeed_plugin=deepspeed_plugin)
 else:
     accelerator = Accelerator(device_placement=False, kwargs_handlers=[ddp_kwargs])
