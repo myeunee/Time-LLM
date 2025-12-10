@@ -38,6 +38,7 @@ COMMON_ARGS_BASE="--task_name long_term_forecast \
   --dec_in 2 \
   --c_out 2 \
   --batch_size 16 \
+  --eval_batch_size 64 \
   --num_workers 0 \
   --learning_rate 3e-4 \
   --llm_model GPT2 \

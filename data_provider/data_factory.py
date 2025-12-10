@@ -22,9 +22,14 @@ def data_provider(args, flag):
     if flag == 'test':
         shuffle_flag = False
         drop_last = True
-        batch_size = args.batch_size
+        batch_size = args.eval_batch_size  # Use eval_batch_size for test
         freq = args.freq
-    else:
+    elif flag == 'val':
+        shuffle_flag = False
+        drop_last = True
+        batch_size = args.eval_batch_size  # Use eval_batch_size for val
+        freq = args.freq
+    else:  # train
         shuffle_flag = True
         drop_last = True
         batch_size = args.batch_size
