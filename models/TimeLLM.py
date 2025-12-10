@@ -42,7 +42,11 @@ class Model(nn.Module):
 
         if configs.llm_model == 'LLAMA':
             # self.llama_config = LlamaConfig.from_pretrained('/mnt/alps/modelhub/pretrained_model/LLaMA/7B_hf/')
-            self.llama_config = LlamaConfig.from_pretrained('huggyllama/llama-7b')
+            try:
+                self.llama_config = LlamaConfig.from_pretrained('huggyllama/llama-7b')
+            except Exception as e:
+                print(f"Failed to load config, attempting download: {e}")
+                self.llama_config = LlamaConfig.from_pretrained('huggyllama/llama-7b', local_files_only=False)
             self.llama_config.num_hidden_layers = configs.llm_layers
             self.llama_config.output_attentions = True
             self.llama_config.output_hidden_states = True
@@ -55,8 +59,8 @@ class Model(nn.Module):
                     config=self.llama_config,
                     # load_in_4bit=True
                 )
-            except EnvironmentError:  # downloads model from HF is not already done
-                print("Local model files not found. Attempting to download...")
+            except (EnvironmentError, OSError, AttributeError) as e:  # downloads model from HF if not already done
+                print(f"Local model files not found ({type(e).__name__}: {e}). Attempting to download...")
                 self.llm_model = LlamaModel.from_pretrained(
                     # "/mnt/alps/modelhub/pretrained_model/LLaMA/7B_hf/",
                     'huggyllama/llama-7b',
@@ -72,8 +76,8 @@ class Model(nn.Module):
                     trust_remote_code=True,
                     local_files_only=True
                 )
-            except EnvironmentError:  # downloads the tokenizer from HF if not already done
-                print("Local tokenizer files not found. Atempting to download them..")
+            except (EnvironmentError, OSError, AttributeError) as e:  # downloads the tokenizer from HF if not already done
+                print(f"Local tokenizer files not found ({type(e).__name__}: {e}). Attempting to download...")
                 self.tokenizer = LlamaTokenizer.from_pretrained(
                     # "/mnt/alps/modelhub/pretrained_model/LLaMA/7B_hf/tokenizer.model",
                     'huggyllama/llama-7b',
@@ -347,8 +351,8 @@ class Model(nn.Module):
             q_fft = torch.fft.rfft(x_cpu.permute(0, 2, 1).contiguous(), dim=-1)
             k_fft = torch.fft.rfft(x_cpu.permute(0, 2, 1).contiguous(), dim=-1)
         else:
-        q_fft = torch.fft.rfft(x_enc.permute(0, 2, 1).contiguous(), dim=-1)
-        k_fft = torch.fft.rfft(x_enc.permute(0, 2, 1).contiguous(), dim=-1)
+            q_fft = torch.fft.rfft(x_enc.permute(0, 2, 1).contiguous(), dim=-1)
+            k_fft = torch.fft.rfft(x_enc.permute(0, 2, 1).contiguous(), dim=-1)
         res = q_fft * torch.conj(k_fft)
         corr = torch.fft.irfft(res, dim=-1)
         mean_value = torch.mean(corr, dim=1)
