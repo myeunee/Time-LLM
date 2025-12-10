@@ -175,6 +175,8 @@ for ii in range(args.itr):
     time_now = time.time()
 
     train_steps = len(train_loader)
+    accelerator.print(f"[INFO] Train dataset size: {len(train_data)}, Train steps per epoch: {train_steps}, Batch size: {args.batch_size}")
+    accelerator.print(f"[INFO] Estimated time per epoch: {train_steps / 3.2 / 60:.1f} minutes (assuming 3.2 it/s)")
     early_stopping = EarlyStopping(accelerator=accelerator, patience=args.patience)
 
     trained_parameters = []

@@ -43,7 +43,8 @@ COMMON_ARGS_BASE="--task_name long_term_forecast \
   --llm_model GPT2 \
   --llm_dim 768 \
   --llm_layers 2 \
-  --train_epochs 20"
+  --train_epochs 20 \
+  --percent 1"
 
 echo "[${DATASET}] Baseline (none)"
 python3 run_main.py $COMMON_ARGS_BASE --model_comment $COMMENT_NONE --extra_head none
