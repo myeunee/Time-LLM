@@ -1,4 +1,4 @@
-from data_provider.data_loader import Dataset_ETT_hour, Dataset_ETT_minute, Dataset_Custom, Dataset_M4
+from data_provider.data_loader import Dataset_ETT_hour, Dataset_ETT_minute, Dataset_Custom, Dataset_M4, Dataset_Trace
 from torch.utils.data import DataLoader
 
 data_dict = {
@@ -9,6 +9,7 @@ data_dict = {
     'ECL': Dataset_Custom,
     'Traffic': Dataset_Custom,
     'Weather': Dataset_Custom,
+    'Trace': Dataset_Trace,
     'm4': Dataset_M4,
 }
 
@@ -41,6 +42,28 @@ def data_provider(args, flag):
             timeenc=timeenc,
             freq=freq,
             seasonal_patterns=args.seasonal_patterns
+        )
+    elif args.data == 'Trace':
+        # Trace dataset with multi-task support
+        data_set = Data(
+            root_path=args.root_path,
+            data_path=args.data_path,
+            flag=flag,
+            size=[args.seq_len, args.label_len, args.pred_len],
+            features=args.features,
+            reg_col=getattr(args, 'reg_col', 'avg_usage_memory'),
+            cls_col=getattr(args, 'cls_col', 'fail_in_window'),
+            target=args.target,
+            timeenc=timeenc,
+            freq=freq,
+            percent=percent,
+            trace_test_ratio=getattr(args, 'trace_test_ratio', 0.1),
+            trace_val_ratio=getattr(args, 'trace_val_ratio', 0.1),
+            seed=getattr(args, 'seed', 2021),
+            trace_split_file=getattr(args, 'trace_split_file', None),
+            use_covariates=getattr(args, 'trace_use_covariates', False),
+            scale=True,
+            seasonal_patterns=None
         )
     else:
         data_set = Data(

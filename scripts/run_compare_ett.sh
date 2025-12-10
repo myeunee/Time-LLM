@@ -18,4 +18,4 @@ conda activate /data/myeunee/timellm
 mkdir -p logs
 
 # 비교 실험 실행
-bash scripts/compare_ett.sh | tee logs/compare_ett_batch_patience_release.log
+bash scripts/compare_ett.sh | tee logs/compare_ett_batch_seq_256.log

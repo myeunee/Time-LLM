@@ -88,7 +88,7 @@ parser.add_argument('--train_epochs', type=int, default=10, help='train epochs')
 parser.add_argument('--align_epochs', type=int, default=10, help='alignment epochs')
 parser.add_argument('--batch_size', type=int, default=32, help='batch size of train input data')
 parser.add_argument('--eval_batch_size', type=int, default=8, help='batch size of model evaluation')
-parser.add_argument('--patience', type=int, default=10, help='early stopping patience')
+parser.add_argument('--patience', type=int, default=100, help='early stopping patience')
 parser.add_argument('--learning_rate', type=float, default=0.0001, help='optimizer learning rate')
 parser.add_argument('--des', type=str, default='test', help='exp description')
 parser.add_argument('--loss', type=str, default='MSE', help='loss function')
@@ -97,6 +97,14 @@ parser.add_argument('--pct_start', type=float, default=0.2, help='pct_start')
 parser.add_argument('--use_amp', action='store_true', help='use automatic mixed precision training', default=False)
 parser.add_argument('--llm_layers', type=int, default=6)
 parser.add_argument('--percent', type=int, default=100)
+
+# Trace dataset specific options
+parser.add_argument('--reg_col', type=str, default='avg_usage_memory', help='regression target column for Trace dataset')
+parser.add_argument('--cls_col', type=str, default='fail_in_window', help='classification target column for Trace dataset')
+parser.add_argument('--trace_test_ratio', type=float, default=0.1, help='test set ratio for Trace dataset (instance-based split)')
+parser.add_argument('--trace_val_ratio', type=float, default=0.1, help='validation set ratio for Trace dataset (instance-based split)')
+parser.add_argument('--trace_split_file', type=str, default=None, help='path to JSON file storing instance splits for Trace dataset')
+parser.add_argument('--trace_use_covariates', action='store_true', default=False, help='use additional covariates for Trace dataset')
 
 # ablation options
 parser.add_argument('--extra_head', type=str, default='none', choices=['none', 'mlp', 'lstm', 'mlp_lstm'],
