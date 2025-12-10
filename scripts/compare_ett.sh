@@ -42,7 +42,7 @@ COMMON_ARGS_BASE="--task_name long_term_forecast \
   --learning_rate 3e-4 \
   --llm_model GPT2 \
   --llm_dim 768 \
-  --llm_layers 6 \
+  --llm_layers 2 \
   --train_epochs 20"
 
 echo "[${DATASET}] Baseline (none)"

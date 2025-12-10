@@ -3,7 +3,7 @@
 #SBATCH --job-name=timellm_compare
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-gpu=4
-#SBATCH --mem-per-gpu=3G
+#SBATCH --mem-per-gpu=8G
 #SBATCH --time 1-0
 #SBATCH --partition=batch_ce_ugrad
 
