@@ -85,7 +85,11 @@ class Model(nn.Module):
                     local_files_only=False
                 )
         elif configs.llm_model == 'GPT2':
-            self.gpt2_config = GPT2Config.from_pretrained('openai-community/gpt2')
+            try:
+                self.gpt2_config = GPT2Config.from_pretrained('openai-community/gpt2')
+            except Exception as e:
+                print(f"Failed to load config, attempting download: {e}")
+                self.gpt2_config = GPT2Config.from_pretrained('openai-community/gpt2', local_files_only=False)
 
             self.gpt2_config.num_hidden_layers = configs.llm_layers
             self.gpt2_config.output_attentions = True
@@ -97,8 +101,8 @@ class Model(nn.Module):
                     local_files_only=True,
                     config=self.gpt2_config,
                 )
-            except EnvironmentError:  # downloads model from HF is not already done
-                print("Local model files not found. Attempting to download...")
+            except (EnvironmentError, OSError, AttributeError) as e:  # downloads model from HF if not already done
+                print(f"Local model files not found ({type(e).__name__}: {e}). Attempting to download...")
                 self.llm_model = GPT2Model.from_pretrained(
                     'openai-community/gpt2',
                     trust_remote_code=True,
@@ -112,8 +116,10 @@ class Model(nn.Module):
                     trust_remote_code=True,
                     local_files_only=True
                 )
-            except EnvironmentError:  # downloads the tokenizer from HF if not already done
-                print("Local tokenizer files not found. Atempting to download them..")
+            except (EnvironmentError, OSError, AttributeError, TypeError) as e:  # downloads the tokenizer from HF if not already done
+                print(f"Local tokenizer files not found ({type(e).__name__}: {e}). Attempting to download...")
+                import time
+                time.sleep(1)  # 다운로드 완료 대기
                 self.tokenizer = GPT2Tokenizer.from_pretrained(
                     'openai-community/gpt2',
                     trust_remote_code=True,
