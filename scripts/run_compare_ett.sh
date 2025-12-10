@@ -14,6 +14,12 @@ cd /data/myeunee/graduation_proj/Time-LLM
 source ~/.bashrc
 conda activate /data/myeunee/timellm
 
+# Hugging Face 캐시 디렉토리를 더 큰 디스크로 변경
+export HF_HOME=/data/myeunee/.cache/huggingface
+export TRANSFORMERS_CACHE=/data/myeunee/.cache/huggingface
+export HF_DATASETS_CACHE=/data/myeunee/.cache/huggingface
+mkdir -p $HF_HOME
+
 # 로그 디렉토리 생성
 mkdir -p logs
 
