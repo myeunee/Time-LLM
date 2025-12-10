@@ -106,8 +106,8 @@ class Dataset_Trace(Dataset):
         # keep key series for per-instance ops
         self.key_series = df_subset[['collection_id','instance_index']].astype(str).agg('__'.join, axis=1).values
 
-        # Optionally apply percent (training subset shortening)
-        if self.set_type == 'train' and self.percent < 100:
+        # Optionally apply percent (subset shortening for all splits)
+        if self.percent < 100:
             cut = int(len(df_subset) * self.percent / 100)
             df_subset = df_subset.iloc[:cut]
 
