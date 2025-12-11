@@ -4,6 +4,7 @@ from accelerate import Accelerator, DeepSpeedPlugin
 from accelerate import DistributedDataParallelKwargs
 from torch import nn, optim
 from torch.optim import lr_scheduler
+from torch.utils.data import DataLoader, Subset
 from tqdm import tqdm
 
 from models import Autoformer, DLinear, TimeLLM
@@ -97,6 +98,13 @@ parser.add_argument('--pct_start', type=float, default=0.2, help='pct_start')
 parser.add_argument('--use_amp', action='store_true', help='use automatic mixed precision training', default=False)
 parser.add_argument('--llm_layers', type=int, default=6)
 parser.add_argument('--percent', type=int, default=100)
+parser.add_argument('--debug_samples', type=int, default=0,
+                    help='limit number of training samples for quick debug; 0 to disable')
+# multi-task / evaluation extras (align with google_cluster_trace_repo)
+parser.add_argument('--multi_task', action='store_true', default=False, help='enable multi-task (reg + cls)')
+parser.add_argument('--cls_loss_weight', type=float, default=1.0, help='classification loss weight')
+parser.add_argument('--last_hour_eval', action='store_true', default=False, help='run last-window evaluation')
+parser.add_argument('--last_hour_steps', type=int, default=12, help='steps for last-hour eval window')
 
 # Trace dataset specific options
 parser.add_argument('--reg_col', type=str, default='avg_usage_memory', help='regression target column for Trace dataset')
@@ -152,6 +160,19 @@ for ii in range(args.itr):
     train_data, train_loader = data_provider(args, 'train')
     vali_data, vali_loader = data_provider(args, 'val')
     test_data, test_loader = data_provider(args, 'test')
+
+    # Optional: limit training subset for quick debug (keep val/test 그대로)
+    if args.debug_samples and args.debug_samples > 0:
+        tN = min(args.debug_samples, len(train_data))
+        train_data = Subset(train_data, list(range(tN)))
+        train_loader = DataLoader(
+            train_data,
+            batch_size=min(args.batch_size, tN),
+            shuffle=True,
+            num_workers=args.num_workers,
+            drop_last=False
+        )
+        accelerator.print(f"[Debug] Subset activated: train={tN}")
 
     if args.model == 'Autoformer':
         model = Autoformer.Model(args).float()
@@ -236,7 +257,19 @@ for ii in range(args.itr):
                     f_dim = -1 if args.features == 'MS' else 0
                     outputs = outputs[:, -args.pred_len:, f_dim:]
                     batch_y = batch_y[:, -args.pred_len:, f_dim:].to(accelerator.device)
-                    loss = criterion(outputs, batch_y)
+                    if args.multi_task and outputs.shape[-1] >= 2:
+                        mem_pred, cls_pred = outputs[:, :, 0], outputs[:, :, 1]
+                        mem_true, cls_true = batch_y[:, :, 0], batch_y[:, :, 1]
+                        fail_ratio = cls_true.mean().item()
+                        if fail_ratio == 0 or fail_ratio == 1:
+                            pos_weight = torch.tensor([1.0], device=cls_pred.device)
+                        else:
+                            pos_weight = torch.tensor([(1 - fail_ratio) / fail_ratio], device=cls_pred.device)
+                        loss_reg = criterion(mem_pred, mem_true)
+                        loss_cls = nn.BCEWithLogitsLoss(pos_weight=pos_weight)(cls_pred, cls_true)
+                        loss = loss_reg + args.cls_loss_weight * loss_cls
+                    else:
+                        loss = criterion(outputs, batch_y)
                     train_loss.append(loss.item())
             else:
                 if args.output_attention:
@@ -247,7 +280,19 @@ for ii in range(args.itr):
                 f_dim = -1 if args.features == 'MS' else 0
                 outputs = outputs[:, -args.pred_len:, f_dim:]
                 batch_y = batch_y[:, -args.pred_len:, f_dim:]
-                loss = criterion(outputs, batch_y)
+                if args.multi_task and outputs.shape[-1] >= 2:
+                    mem_pred, cls_pred = outputs[:, :, 0], outputs[:, :, 1]
+                    mem_true, cls_true = batch_y[:, :, 0], batch_y[:, :, 1]
+                    fail_ratio = cls_true.mean().item()
+                    if fail_ratio == 0 or fail_ratio == 1:
+                        pos_weight = torch.tensor([1.0], device=cls_pred.device)
+                    else:
+                        pos_weight = torch.tensor([(1 - fail_ratio) / fail_ratio], device=cls_pred.device)
+                    loss_reg = criterion(mem_pred, mem_true)
+                    loss_cls = nn.BCEWithLogitsLoss(pos_weight=pos_weight)(cls_pred, cls_true)
+                    loss = loss_reg + args.cls_loss_weight * loss_cls
+                else:
+                    loss = criterion(outputs, batch_y)
                 train_loss.append(loss.item())
 
             if (i + 1) % 100 == 0:
