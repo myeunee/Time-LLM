@@ -29,23 +29,26 @@ COMMON_ARGS_BASE="--task_name long_term_forecast \
   --cls_col fail_in_window \
   --trace_use_covariates \
   --seq_len 256 \
-  --label_len 32 \
-  --pred_len 32 \
+  --label_len 12 \
+  --pred_len 12 \
   --e_layers 1 \
   --d_layers 1 \
-  --factor 1 \
-  --enc_in 2 \
-  --dec_in 2 \
+  --factor 3 \
+  --stride 16 \
+  --enc_in 10 \
+  --dec_in 10 \
   --c_out 2 \
-  --batch_size 16 \
+  --batch_size 48 \
   --eval_batch_size 64 \
   --num_workers 0 \
-  --learning_rate 3e-4 \
+  --learning_rate 0.0001 \
   --llm_model GPT2 \
   --llm_dim 768 \
   --llm_layers 2 \
-  --train_epochs 20 \
-  --percent 1"
+  --d_ff 64 \
+  --use_amp \
+  --debug_samples 600000 \
+  --train_epochs 20"
 
 echo "[${DATASET}] Baseline (none)"
 python3 run_main.py $COMMON_ARGS_BASE --model_comment $COMMENT_NONE --extra_head none
