@@ -28,9 +28,9 @@ COMMON_ARGS_BASE="--task_name long_term_forecast \
   --reg_col avg_usage_memory \
   --cls_col fail_in_window \
   --trace_use_covariates \
-  --seq_len 256 \
+  --seq_len 24 \
   --label_len 12 \
-  --pred_len 12 \
+  --pred_len 2 \
   --e_layers 1 \
   --d_layers 1 \
   --factor 3 \
@@ -44,9 +44,11 @@ COMMON_ARGS_BASE="--task_name long_term_forecast \
   --learning_rate 0.0001 \
   --llm_model GPT2 \
   --llm_dim 768 \
-  --llm_layers 2 \
+  --llm_layers 1 \
   --d_ff 64 \
   --use_amp \
+  --multi_task \
+  --cls_loss_weight 1.0 \
   --debug_samples 600000 \
   --train_epochs 20"
 
