@@ -172,9 +172,30 @@ def vali(args, accelerator, model, vali_data, vali_loader, criterion, mae_metric
             pred = outputs.detach()
             true = batch_y.detach()
 
-            loss = criterion(pred, true)
-
-            mae_loss = mae_metric(pred, true)
+            # Apply multi-task loss if enabled (same as training)
+            if hasattr(args, 'multi_task') and args.multi_task and outputs.shape[-1] >= 2:
+                mem_pred = pred[:, :, 0]
+                mem_true = true[:, :, 0]
+                cls_pred = pred[:, :, 1]
+                cls_true = true[:, :, 1]
+                loss_reg = criterion(mem_pred, mem_true)
+                
+                # Calculate fail ratio for pos_weight
+                fail_ratio = cls_true.mean().item()
+                if fail_ratio == 0 or fail_ratio == 1:
+                    pos_weight = torch.tensor([1.0]).to(cls_pred.device)
+                else:
+                    pos_weight = torch.tensor([(1 - fail_ratio) / fail_ratio]).to(cls_pred.device)
+                
+                import torch.nn as nn
+                loss_cls = nn.BCEWithLogitsLoss(pos_weight=pos_weight)(cls_pred, cls_true)
+                loss = loss_reg + args.cls_loss_weight * loss_cls
+                
+                # MAE only on regression (memory) channel
+                mae_loss = mae_metric(mem_pred, mem_true)
+            else:
+                loss = criterion(pred, true)
+                mae_loss = mae_metric(pred, true)
 
             total_loss.append(loss.item())
             total_mae_loss.append(mae_loss.item())

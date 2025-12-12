@@ -161,10 +161,16 @@ for ii in range(args.itr):
     vali_data, vali_loader = data_provider(args, 'val')
     test_data, test_loader = data_provider(args, 'test')
 
-    # Optional: limit training subset for quick debug (keep val/test 그대로)
+    # Optional: limit all subsets for quick debug
     if args.debug_samples and args.debug_samples > 0:
         tN = min(args.debug_samples, len(train_data))
+        vN = min(args.debug_samples // 4, len(vali_data))  # val은 1/4 크기
+        teN = min(args.debug_samples // 4, len(test_data))  # test도 1/4 크기
+        
         train_data = Subset(train_data, list(range(tN)))
+        vali_data = Subset(vali_data, list(range(vN)))
+        test_data = Subset(test_data, list(range(teN)))
+        
         train_loader = DataLoader(
             train_data,
             batch_size=min(args.batch_size, tN),
@@ -172,7 +178,21 @@ for ii in range(args.itr):
             num_workers=args.num_workers,
             drop_last=False
         )
-        accelerator.print(f"[Debug] Subset activated: train={tN}")
+        vali_loader = DataLoader(
+            vali_data,
+            batch_size=args.eval_batch_size,
+            shuffle=False,
+            num_workers=args.num_workers,
+            drop_last=False
+        )
+        test_loader = DataLoader(
+            test_data,
+            batch_size=args.eval_batch_size,
+            shuffle=False,
+            num_workers=args.num_workers,
+            drop_last=False
+        )
+        accelerator.print(f"[Debug] Subset activated: train={tN}, val={vN}, test={teN}")
 
     if args.model == 'Autoformer':
         model = Autoformer.Model(args).float()
@@ -295,14 +315,18 @@ for ii in range(args.itr):
                     loss = criterion(outputs, batch_y)
                 train_loss.append(loss.item())
 
-            if (i + 1) % 100 == 0:
-                accelerator.print(
-                    "\titers: {0}, epoch: {1} | loss: {2:.7f}".format(i + 1, epoch + 1, loss.item()))
-                speed = (time.time() - time_now) / iter_count
-                left_time = speed * ((args.train_epochs - epoch) * train_steps - i)
-                accelerator.print('\tspeed: {:.4f}s/iter; left time: {:.4f}s'.format(speed, left_time))
-                iter_count = 0
-                time_now = time.time()
+                if (i + 1) % 100 == 0:
+                    accelerator.print(
+                        "\titers: {0}, epoch: {1} | loss: {2:.7f}".format(i + 1, epoch + 1, loss.item()))
+                    speed = (time.time() - time_now) / iter_count
+                    left_time = speed * ((args.train_epochs - epoch) * train_steps - i)
+                    accelerator.print('\tspeed: {:.4f}s/iter; left time: {:.4f}s'.format(speed, left_time))
+                    iter_count = 0
+                    time_now = time.time()
+                    
+                    # Clear GPU cache every 100 iterations to prevent memory fragmentation
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
 
             if args.use_amp:
                 scaler.scale(loss).backward()

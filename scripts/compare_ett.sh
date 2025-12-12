@@ -28,9 +28,9 @@ COMMON_ARGS_BASE="--task_name long_term_forecast \
   --reg_col avg_usage_memory \
   --cls_col fail_in_window \
   --trace_use_covariates \
-  --seq_len 24 \
-  --label_len 12 \
-  --pred_len 2 \
+  --seq_len 12 \
+  --label_len 6 \
+  --pred_len 3 \
   --e_layers 1 \
   --d_layers 1 \
   --factor 3 \
@@ -49,7 +49,7 @@ COMMON_ARGS_BASE="--task_name long_term_forecast \
   --use_amp \
   --multi_task \
   --cls_loss_weight 1.0 \
-  --debug_samples 600000 \
+  --debug_samples 300000 \
   --train_epochs 20"
 
 echo "[${DATASET}] Baseline (none)"
