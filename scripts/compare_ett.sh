@@ -34,7 +34,6 @@ COMMON_ARGS_BASE="--task_name long_term_forecast \
   --e_layers 1 \
   --d_layers 1 \
   --factor 3 \
-  --stride 16 \
   --enc_in 10 \
   --dec_in 10 \
   --c_out 2 \
