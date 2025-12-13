@@ -29,6 +29,8 @@ COMMON_ARGS_BASE="--task_name long_term_forecast \
   --cls_col fail_in_window \
   --trace_use_covariates \
   --seq_len 12 \
+  --patch_len 4 \
+  --stride 2 \
   --label_len 6 \
   --pred_len 3 \
   --e_layers 1 \
