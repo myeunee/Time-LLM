@@ -52,8 +52,13 @@ COMMON_ARGS_BASE="--task_name long_term_forecast \
   --debug_samples 300000 \
   --train_epochs 20"
 
+echo "========================================="
 echo "[${DATASET}] Baseline (none)"
+echo "========================================="
 python3 run_main.py $COMMON_ARGS_BASE --model_comment $COMMENT_NONE --extra_head none
 
+echo ""
+echo "========================================="
 echo "[${DATASET}] With MLP+LSTM"
+echo "========================================="
 python3 run_main.py $COMMON_ARGS_BASE --model_comment $COMMENT_MLPLSTM --extra_head mlp_lstm
